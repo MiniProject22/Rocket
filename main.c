@@ -31,7 +31,7 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+#define Calibrate 1
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -50,7 +50,6 @@ I2C_HandleTypeDef hi2c1;
 TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim15;
-TIM_HandleTypeDef htim16;
 
 UART_HandleTypeDef huart2;
 
@@ -60,20 +59,19 @@ UART_HandleTypeDef huart2;
 char rx_buffer[BUFFER_SIZE];    // Buffer de réception
 volatile uint8_t rx_index = 0;  // Index pour écrire dans le buffer
 volatile bool message_ready = false; // Indique si un message complet est reçu
-volatile int pouette = 0;       // Variable pouette
 char received_char = 'Z';
-
+#define MPU6050_ADDR 0x68 << 1  // Adresse I2C du MPU6050 (décalée pour HAL)
+extern I2C_HandleTypeDef hi2c1;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
-static void MX_TIM1_Init(void);
 static void MX_TIM2_Init(void);
 static void MX_TIM15_Init(void);
 static void MX_I2C1_Init(void);
-static void MX_TIM16_Init(void);
+static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -89,77 +87,117 @@ static void MX_TIM16_Init(void);
   */
 int main(void)
 {
-
   /* USER CODE BEGIN 1 */
-	//Entrance Angle
-	float angleO = 0; //En radiant!!! Le petit
-	float angleP = 0; //En radiant!!! Le tour
 
-	//Step Freq Const
+	// Entrance Angle
+	float angleO = 0; // En radiant!!! Le petit
+	float angleP = 0; // En radiant!!! Le tour
+
+	// Step Freq Const
 	float Current_Max_Freq = 0; // Hz
-	float Max_Start_Freq = 1100; // Hz
-	float Max_End_Freq = 1100; // Hz
+	float Max_Start_Freq = 1000; // Hz
+	float Max_End_Freq = 1800; // Hz
 	float Max_Accel = 50; // Hz/s
-	float Nb_Acc_p_action_accél = 50; //Hz
-	int Presc_a;
-	int Presc_b;
-	int Presc_c;
+	float Nb_Acc_p_action_accél = 1; // Hz
+	int Presc_a, Presc_b;
 
-	//STM32 data Const
+	// STM32 data Const
 	int PWM_Freq = 80000000;
-	int PWM_Counter_Period = 401; //+1
-	double Precision_taille_verin = 0.0001f; //m
+	int PWM_Counter_Period = 401; // +1
+	double Precision_taille_verin = 0.001f; // m
 
-	//Coordonate
-	double CoordA[3] = {};
-	double CoordB[3] = {};
-	double CoordC[3] = {};
-	double CoordAP[3] = {};
-	double CoordBP[3] = {};
-	double CoordCP[3] = {};
+	// Coordonate
+	double CoordA[3] = {}, CoordB[3] = {};
+	double CoordAP[3] = {}, CoordBP[3] = {};
 
-	//Angular velocity
-	double Rota_SpeedA = 0;
-	double Rota_SpeedB = 0;
-	double Rota_SpeedC = 0;
+	// Angular velocity
+	double Rota_SpeedA = 0, Rota_SpeedB = 0;
 
-	//Lenght actuator
-	double LenghtA;
-	double LenghtB;
-	double LenghtC;
-	double True_LenghtA;
-	double True_LenghtB;
-	double True_LenghtC;
-	double Dif_LenghtA = 0;
-	double Dif_LenghtB = 0;
-	double Dif_LenghtC = 0;
-	double Abs_Dif_LenghtA = 0;
-	double Abs_Dif_LenghtB = 0;
-	double Abs_Dif_LenghtC = 0;
-	int Sg_Dif_LenghtA = 0;
-	int Sg_Dif_LenghtB = 0;
-	int Sg_Dif_LenghtC = 0;
+	// Lenght actuator
+	double LenghtA, LenghtB, True_LenghtA, True_LenghtB;
+	double Dif_LenghtA = 0, Dif_LenghtB = 0;
+	double Abs_Dif_LenghtA = 0, Abs_Dif_LenghtB = 0;
+	int Sg_Dif_LenghtA = 0, Sg_Dif_LenghtB = 0;
 
-	//Time
-	double Time_Tot = 0;
-	double Time_For_Acc = 0;
-	double elapsed_time = 0;
-	uint32_t start_cycles = 0;
-	uint32_t stop_cycles;
-	uint32_t cycles_elapsed ;
+	// Time
+	double Time_Tot = 0, Time_For_Acc = 0, elapsed_time = 0;
+	uint32_t start_cycles = 0, stop_cycles, cycles_elapsed;
 
-	//Const
+	// Fan
+	int Speed_Fan = 0;
+
+	// Gyro/Acc
+	float Angle_Acc_Roll, Angle_Acc_Pitch;
+	float KalmanAngleRoll = 0, KalmanUncertaintyAngleRoll = 2 * 2;
+	float KalmanAnglePitch = 0, KalmanUncertaintyAnglePitch = 2 * 2;
+	double Cal_Gyro_Roll = 0, Cal_Gyro_Pitch = 0, Cal_Gyro_Yaw = 0;
+	float Kalman1DOutput[] = {0, 0};
+
+	// Coord
+	float theta_polar = 0.0, phi_polar = 0.0;
+
+	// Const
 	float Pi = 3.141592653589793f;
-	float Extradmot = 0.065f;
-	float Intradmot = 0.040f;
-	float Extheigmot = 0.010f;
-	float Intheigmot = 0.115f;
+	float Extradmot = 0.056f, Intradmot = 0.040f;
+	float Extheigmot = 0.007f, Intheigmot = 0.099574f;
 	float Thread_pitch = 0.0008f;
 	short nb_step_motor = 200;
+	float max_O_angle = 0.2118; // 0.2618
+	float pitchRad;
+	float rollRad;
 
-	//Comunication:
+	//MPU6050
+	#define ACCEL_CONFIG_REG 0x1C
+	#define GYRO_CONFIG_REG 0x1B
+	float Ax, Ay, Az;
+	float Gx, Gy, Gz;
+	int16_t Accel_X_RAW, Accel_Y_RAW, Accel_Z_RAW;
+	int16_t Gyro_X_RAW, Gyro_Y_RAW, Gyro_Z_RAW;
+
+	// Comunication
 	uint8_t buf[100];
-	int pouett = 1;
+	int data=0;
+
+	void MPU6050_Init(void) {
+		uint8_t check, data;
+
+		HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, 0x75, 1, &check, 1, 1000);
+		if (check == 0x68){
+			data = 0;
+			HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, 0x6B, 1, &data, 1, 1000);
+
+			data = 0x07;
+			HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, 0x19, 1, &data, 1, 1000);
+
+			data = 0x00;//2g
+			HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, ACCEL_CONFIG_REG, 1, &data, 1, 1000);
+
+			data = 0x08;//500°/s
+			HAL_I2C_Mem_Write(&hi2c1, MPU6050_ADDR, GYRO_CONFIG_REG, 1, &data, 1, 1000);
+		}
+	}
+
+	void MPU6050_Read_Sensors(void) {
+		uint8_t Rec_Data[6];
+
+		HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, 0x3B, 1, Rec_Data, 6, 1000);
+		Accel_X_RAW = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+		Accel_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);
+		Accel_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+
+		Ax = (float)Accel_X_RAW / 16384.0 - 0.012;
+		Ay = (float)Accel_Y_RAW / 16384.0 + 0.015;
+		Az = (float)Accel_Z_RAW / 16384.0 - 0.08;
+
+		HAL_I2C_Mem_Read(&hi2c1, MPU6050_ADDR, 0x43, 1, Rec_Data, 6, 1000);
+		Gyro_X_RAW = (int16_t)(Rec_Data[0] << 8 | Rec_Data[1]);
+		Gyro_Y_RAW = (int16_t)(Rec_Data[2] << 8 | Rec_Data[3]);
+		Gyro_Z_RAW = (int16_t)(Rec_Data[4] << 8 | Rec_Data[5]);
+
+		Gx = (float)Gyro_X_RAW / 65.5;
+		Gy = (float)Gyro_Y_RAW / 65.5;
+		Gz = (float)Gyro_Z_RAW / 65.5;
+	}
 
 	void DWT_Init(void) {
 	  CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
@@ -175,41 +213,25 @@ int main(void)
 		CoordBP[1] = cos(30 * Pi / 180 - angleP) * Intradmot * cos(angleO) * sin(angleP) + sin(30 * Pi / 180 - angleP) * Intradmot * cos(angleP) + Intheigmot * sin(angleO) * sin(angleP);
 		CoordBP[2] = cos(30 * Pi / 180 - angleP) * Intradmot * (-sin(angleO)) + Intheigmot * cos(angleO);
 
-		CoordCP[0] = cos(150 * Pi / 180 - angleP) * Intradmot * cos(angleO) * cos(angleP) + sin(150 * Pi / 180 - angleP) * Intradmot * (-sin(angleP)) + Intheigmot * sin(angleO) * cos(angleP);
-		CoordCP[1] = cos(150 * Pi / 180 - angleP) * Intradmot * cos(angleO) * sin(angleP) + sin(150 * Pi / 180 - angleP) * Intradmot * cos(angleP) + Intheigmot * sin(angleO) * sin(angleP);
-		CoordCP[2] = cos(150 * Pi / 180 - angleP) * Intradmot * (-sin(angleO)) + Intheigmot * cos(angleO);
-
 		LenghtA = sqrt((CoordA[0] - CoordAP[0]) * (CoordA[0] - CoordAP[0]) + (CoordA[1] - CoordAP[1]) * (CoordA[1] - CoordAP[1]) + (CoordA[2] - CoordAP[2]) * (CoordA[2] - CoordAP[2]));
 		LenghtB = sqrt((CoordB[0] - CoordBP[0]) * (CoordB[0] - CoordBP[0]) + (CoordB[1] - CoordBP[1]) * (CoordB[1] - CoordBP[1]) + (CoordB[2] - CoordBP[2]) * (CoordB[2] - CoordBP[2]));
-		LenghtC = sqrt((CoordC[0] - CoordCP[0]) * (CoordC[0] - CoordCP[0]) + (CoordC[1] - CoordCP[1]) * (CoordC[1] - CoordCP[1]) + (CoordC[2] - CoordCP[2]) * (CoordC[2] - CoordCP[2]));
 
 		Dif_LenghtA = LenghtA - True_LenghtA;
 		Dif_LenghtB = LenghtB - True_LenghtB;
-		Dif_LenghtC = LenghtC - True_LenghtC;
 
-		if (Dif_LenghtA < 0) Sg_Dif_LenghtA = -1;
-		else Sg_Dif_LenghtA = 1;
-		if (Dif_LenghtB<0) Sg_Dif_LenghtB = -1;
-		else Sg_Dif_LenghtB = 1;
-		if (Dif_LenghtC < 0) Sg_Dif_LenghtC = -1;
-		else Sg_Dif_LenghtC = 1;
+		if (Dif_LenghtA * Sg_Dif_LenghtA < 0 ||Dif_LenghtB * Sg_Dif_LenghtB < 0) {
+			Current_Max_Freq = 0;
+		}
+
+	    Sg_Dif_LenghtA = (Dif_LenghtA < 0) ? -1 : 1;
+	    Sg_Dif_LenghtB = (Dif_LenghtB < 0) ? -1 : 1;
 
 		Abs_Dif_LenghtA = Sg_Dif_LenghtA * Dif_LenghtA;
 		Abs_Dif_LenghtB = Sg_Dif_LenghtB * Dif_LenghtB;
-		Abs_Dif_LenghtC = Sg_Dif_LenghtC * Dif_LenghtC;
-/*
-//		sprintf((char*)buf,"%.7f ; %.7f ; %.7f ; \r\n",Dif_TailleA,Dif_TailleB,Dif_TailleC);
-//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
-//		sprintf((char*)buf,"%d ; %d ; %d ; \r\n",Sg_Dif_TailleA,Sg_Dif_TailleB,Sg_Dif_TailleC);
-//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
-//		sprintf((char*)buf,"%.7f ; %.7f ; %.7f ; \r\n",Abs_Dif_TailleA,Abs_Dif_TailleB,Abs_Dif_TailleC);
-//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);*/
-
 	}
 	void ReCoord(){
 		CoordA[0] = cos(270 * Pi / 180) * Extradmot, CoordA[1] = sin(270 * Pi / 180) * Extradmot, CoordA[2] = Extheigmot;
 		CoordB[0] = cos(30 * Pi / 180) * Extradmot, CoordB[1] = sin(30 * Pi / 180) * Extradmot, CoordB[2] = Extheigmot;
-		CoordC[0] = cos(150 * Pi / 180) * Extradmot, CoordC[1] = sin(150 * Pi / 180) * Extradmot, CoordC[2] = Extheigmot;
 	}
 	void Intitialisation(){
 		ReCoord();
@@ -218,107 +240,56 @@ int main(void)
 		ReLenght();
 		True_LenghtA = LenghtA;
 		True_LenghtB = LenghtB;
-		True_LenghtC = LenghtC;
 		sprintf((char*)buf,"\r\n \r\n");
 		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
-		TIM16->CCR1 = 30;
 		TIM2->CCR1 = 30;
 		TIM15->CCR2 = 30;
 		DWT_Init();
 		HAL_UART_Receive_IT(&huart2, (uint8_t *)rx_buffer, 1);
-		HAL_GPIO_WritePin(GPIOA, MotAR_Pin, GPIO_PIN_SET);
-		HAL_GPIO_WritePin(GPIOA, MotBR_Pin, GPIO_PIN_SET);
-		HAL_GPIO_WritePin(GPIOA, MotCR_Pin, GPIO_PIN_SET);
+		HAL_GPIO_WritePin(GPIOA, MotAR_Pin, GPIO_PIN_RESET);
+		HAL_GPIO_WritePin(GPIOA, MotBR_Pin, GPIO_PIN_RESET);
+		MPU6050_Init();
 	}
-	void ReTrueLenght_Speed()
-	{
-		True_LenghtA = True_LenghtA + elapsed_time * Thread_pitch * Rota_SpeedA;
-		True_LenghtB = True_LenghtB + elapsed_time * Thread_pitch * Rota_SpeedB;
-		True_LenghtC = True_LenghtC + elapsed_time * Thread_pitch * Rota_SpeedC;
+	void ReTrueLenght_Speed() {
+	    True_LenghtA += elapsed_time * Thread_pitch * Rota_SpeedA;
+	    True_LenghtB += elapsed_time * Thread_pitch * Rota_SpeedB;
 
-		if (Abs_Dif_LenghtA > Precision_taille_verin || Abs_Dif_LenghtB > Precision_taille_verin || Abs_Dif_LenghtC > Precision_taille_verin)
-		{
-			if (Abs_Dif_LenghtA > Abs_Dif_LenghtB && Abs_Dif_LenghtA > Abs_Dif_LenghtC)
-			{
-				Presc_a = PWM_Freq / (Current_Max_Freq * PWM_Counter_Period) - 0.5;
-				Presc_b = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtB / Abs_Dif_LenghtA)) - 0.5;
-				Presc_c = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtC / Abs_Dif_LenghtA)) - 0.5;
+	    if (Abs_Dif_LenghtA > Precision_taille_verin || Abs_Dif_LenghtB > Precision_taille_verin) {
+	        if (Abs_Dif_LenghtA > Abs_Dif_LenghtB) {
+	            Presc_a = PWM_Freq / (Current_Max_Freq * PWM_Counter_Period) - 0.5;
+	            Presc_b = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtB / Abs_Dif_LenghtA)) - 0.5;
 
-				Rota_SpeedA = (Current_Max_Freq / nb_step_motor) * Sg_Dif_LenghtA;
-				Rota_SpeedB = (Current_Max_Freq * (Abs_Dif_LenghtB / Abs_Dif_LenghtA) / nb_step_motor) * Sg_Dif_LenghtB;
-				Rota_SpeedC = (Current_Max_Freq * (Abs_Dif_LenghtC / Abs_Dif_LenghtA) / nb_step_motor) * Sg_Dif_LenghtC;
-			}
-			else if (Abs_Dif_LenghtB > Abs_Dif_LenghtA && Abs_Dif_LenghtB > Abs_Dif_LenghtC)
-			{
-				Presc_a = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtA / Abs_Dif_LenghtB)) - 0.5;
-				Presc_b = PWM_Freq / (Current_Max_Freq * PWM_Counter_Period) - 0.5;
-				Presc_c = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtC / Abs_Dif_LenghtB)) - 0.5;
+	            Rota_SpeedA = (Current_Max_Freq / nb_step_motor) * Sg_Dif_LenghtA;
+	            Rota_SpeedB = (Current_Max_Freq * (Abs_Dif_LenghtB / Abs_Dif_LenghtA) / nb_step_motor) * Sg_Dif_LenghtB;
+	        } else {
+	            Presc_a = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtA / Abs_Dif_LenghtB)) - 0.5;
+	            Presc_b = PWM_Freq / (Current_Max_Freq * PWM_Counter_Period) - 0.5;
 
-				Rota_SpeedA = (Current_Max_Freq * (Abs_Dif_LenghtA / Abs_Dif_LenghtB) / nb_step_motor) * Sg_Dif_LenghtA;
-				Rota_SpeedB = (Current_Max_Freq / nb_step_motor) * Sg_Dif_LenghtB;
-				Rota_SpeedC = (Current_Max_Freq * (Abs_Dif_LenghtC / Abs_Dif_LenghtB) / nb_step_motor) * Sg_Dif_LenghtC;
-			}
-			else
-			{
-				Presc_a = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtA / Abs_Dif_LenghtC)) - 0.5;
-				Presc_b = PWM_Freq / ((Current_Max_Freq * PWM_Counter_Period) * (Abs_Dif_LenghtB / Abs_Dif_LenghtC)) - 0.5;
-				Presc_c = PWM_Freq / (Current_Max_Freq * PWM_Counter_Period) - 0.5;
+	            Rota_SpeedA = (Current_Max_Freq * (Abs_Dif_LenghtA / Abs_Dif_LenghtB) / nb_step_motor) * Sg_Dif_LenghtA;
+	            Rota_SpeedB = (Current_Max_Freq / nb_step_motor) * Sg_Dif_LenghtB;
+	        }
 
-				Rota_SpeedA = (Current_Max_Freq * (Abs_Dif_LenghtA / Abs_Dif_LenghtC) / nb_step_motor) * Sg_Dif_LenghtA;
-				Rota_SpeedB = (Current_Max_Freq * (Abs_Dif_LenghtB / Abs_Dif_LenghtC) / nb_step_motor) * Sg_Dif_LenghtB;
-				Rota_SpeedC = (Current_Max_Freq / nb_step_motor) * Sg_Dif_LenghtC;
-			}
-			if (HAL_GPIO_ReadPin(GPIOA, MotAR_Pin) == 0) {
-			HAL_GPIO_WritePin(GPIOA, MotAR_Pin, GPIO_PIN_SET);
-			HAL_GPIO_WritePin(GPIOA, MotBR_Pin, GPIO_PIN_SET);
-			HAL_GPIO_WritePin(GPIOA, MotCR_Pin, GPIO_PIN_SET);
-			}
-		}
-		else
-		{
-			HAL_GPIO_WritePin(GPIOA, MotAR_Pin, GPIO_PIN_RESET);
-			HAL_GPIO_WritePin(GPIOA, MotBR_Pin, GPIO_PIN_RESET);
-			HAL_GPIO_WritePin(GPIOA, MotCR_Pin, GPIO_PIN_RESET);
+	        if (!HAL_GPIO_ReadPin(GPIOA, MotAR_Pin)) {
+	            HAL_GPIO_WritePin(GPIOA, MotAR_Pin, GPIO_PIN_SET);
+	            HAL_GPIO_WritePin(GPIOA, MotBR_Pin, GPIO_PIN_SET);
+	        }
+	    } else {
+	        HAL_GPIO_WritePin(GPIOA, MotAR_Pin, GPIO_PIN_RESET);
+	        HAL_GPIO_WritePin(GPIOA, MotBR_Pin, GPIO_PIN_RESET);
 
-			Rota_SpeedA = 0 ;
-			Rota_SpeedB = 0 ;
-			Rota_SpeedC = 0 ;
+	        Rota_SpeedA = 0;
+	        Rota_SpeedB = 0;
+	        Current_Max_Freq = 0;
+	    }
 
-			Current_Max_Freq = 0;
+	    TIM2->ARR = Presc_b;
+	    TIM15->ARR = Presc_a;
 
-//			if (pouett == 1) {
-//				angleO = 0;
-//				angleP = 2;
-//				pouett = 0;
-//			} else {
-//				angleO = 0.150;
-//				angleP = 2.620;
-//				pouett = 1;
-//			}
+	    HAL_GPIO_WritePin(GPIOB, MotAD_Pin, (Dif_LenghtA < 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
+	    HAL_GPIO_WritePin(GPIOB, MotBD_Pin, (Dif_LenghtB < 0) ? GPIO_PIN_RESET : GPIO_PIN_SET);
 
-
-		}
-		TIM1->ARR = Presc_a;
-		TIM2->ARR = Presc_b;
-		TIM15->ARR = Presc_c;
-
-		if (Dif_LenghtA < 0) HAL_GPIO_WritePin(GPIOB, MotAD_Pin, GPIO_PIN_RESET);
-		else HAL_GPIO_WritePin(GPIOB, MotAD_Pin, GPIO_PIN_SET);
-		if (Dif_LenghtB < 0) HAL_GPIO_WritePin(GPIOB, MotBD_Pin, GPIO_PIN_RESET);
-		else HAL_GPIO_WritePin(GPIOB, MotBD_Pin, GPIO_PIN_SET);
-		if (Dif_LenghtC < 0) HAL_GPIO_WritePin(GPIOB, MotCD_Pin, GPIO_PIN_RESET);
-		else HAL_GPIO_WritePin(GPIOB, MotCD_Pin, GPIO_PIN_SET);
-
-		Time_For_Acc = Time_For_Acc + elapsed_time;
-		Time_Tot = elapsed_time +Time_Tot;
-//		sprintf((char*)buf,"%.1f \r\n",Current_Max_Freq);
-//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
-//		sprintf((char*)buf,"%u ; %u ; %u \r\n",Presc_a,Presc_b,Presc_c);
-//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
-//		sprintf((char*)buf,"%.7f ; %.7f ; \r\n",elapsed_time,Time_Tot);
-//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
-//		HAL_UART_Transmit(&huart2, tx_buffer, 27, 100);
-
+	    Time_For_Acc += elapsed_time;
+	    Time_Tot += elapsed_time;
 	}
 	void ReAccel(){
 		if (Current_Max_Freq == 0) Current_Max_Freq = Max_Start_Freq;
@@ -349,12 +320,91 @@ int main(void)
 	}
 	void TestCode(){
         if (strncmp(rx_buffer, "Ang", 3) == 0 && sscanf(rx_buffer, "Ang:%f;%f", &angleO, &angleP) == 2) {
-        }else {
+        }
+        else if (strncmp(rx_buffer, "Fan", 3) == 0 && sscanf(rx_buffer, "Fan:%d", &Speed_Fan) == 1) {
+    		TIM1->CCR4 = Speed_Fan;
+		}
+        else {
 			   sprintf((char*)buf,"Unknown code\r\n");
 			   HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
 		}
 	}
 
+	void kalman_1d(float KalmanState, float KalmanUncertainty, float KalmanInput, float KalmanMeasurement) {
+	    KalmanState += 0.004 * KalmanInput;
+	    KalmanUncertainty += 0.06;//0.03
+	    float KalmanGain = KalmanUncertainty / (KalmanUncertainty*KalmanUncertainty + 1.0);//0.9
+	    KalmanState += KalmanGain * (KalmanMeasurement - KalmanState);
+	    KalmanUncertainty *= (1 - KalmanGain);
+	    Kalman1DOutput[0] = KalmanState;
+	    Kalman1DOutput[1] = KalmanUncertainty;
+	}
+	void Cal_Gyro(){
+		Cal_Gyro_Roll = 0;
+		Cal_Gyro_Pitch = 0;
+		Cal_Gyro_Yaw = 0;
+		for (int i = 0 ; i< 1000; i++) {
+			MPU6050_Read_Sensors();
+			Cal_Gyro_Roll+= Gx ;
+		    Cal_Gyro_Pitch+= Gy ;
+		    Cal_Gyro_Yaw+= Gz ;
+
+		}
+	    Cal_Gyro_Roll/= 1000 ;
+	    Cal_Gyro_Pitch/= 1000 ;
+	    Cal_Gyro_Yaw/= 1000 ;
+	}
+	void Re_Gyro_Angle() {
+	    Gx -= Cal_Gyro_Roll;
+	    Gy -= Cal_Gyro_Pitch;
+	    Gz -= Cal_Gyro_Yaw;
+
+	    // Calcul des angles d'accéléromètre
+	    Angle_Acc_Roll = atan(Ay / sqrt(Ax * Ax + Az * Az)) * (180.0 / Pi);
+	    Angle_Acc_Pitch = atan(Ax / sqrt(Ay * Ay + Az * Az)) * (180.0 / Pi);
+
+	    // Application du filtre de Kalman pour les angles
+	    kalman_1d(KalmanAngleRoll, KalmanUncertaintyAngleRoll, Gx, Angle_Acc_Roll);
+	    KalmanAngleRoll = Kalman1DOutput[0];
+	    KalmanUncertaintyAngleRoll = Kalman1DOutput[1];
+
+	    kalman_1d(KalmanAnglePitch, KalmanUncertaintyAnglePitch, Gy, Angle_Acc_Pitch);
+	    KalmanAnglePitch = Kalman1DOutput[0];
+	    KalmanUncertaintyAnglePitch = Kalman1DOutput[1];
+
+	    // Conversion des angles de Roll et Pitch en radians
+	    rollRad = KalmanAngleRoll * M_PI / 180.0;
+	    pitchRad = KalmanAnglePitch * M_PI / 180.0;
+
+	    // Calcul des angles polaires
+	    theta_polar = acos(cos(pitchRad) * cos(rollRad));  // Angle d’élévation
+	    phi_polar = atan2(sin(rollRad), sin(pitchRad));    // Angle azimutal
+
+	    if (phi_polar < 0) {
+	            phi_polar += 2*Pi;
+	    }
+
+//		sprintf((char*)buf,"%.4f;%.4f;%.4f;%.4f;%.4f;%.4f\r\n",Ax,Ay,Az,Gx,Gy,Gz);
+//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
+//		sprintf((char*)buf,"%.4f ; %.4f ; %.4f \r\n",Gx,Gy,Gz);
+//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
+//		sprintf((char*)buf,"%.4f;%.4f\r\n",Angle_Acc_Roll,Angle_Acc_Pitch);
+//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
+//		sprintf((char*)buf,"%.4f;%.4f;%.4f\r\n",Gx,Gy,Gz);
+//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
+//		sprintf((char*)buf,"%.4f;%.4f;%.4f;%.4f\r\n",KalmanAngleRoll,KalmanAnglePitch,Angle_Acc_Roll,Angle_Acc_Pitch);
+//		HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
+	}
+	void Send_Data(){
+		if (data>10) {
+			sprintf((char*)buf,"%.4f;%.4f;%.4f\r\n",Time_Tot,rollRad,pitchRad);
+			HAL_UART_Transmit(&huart2, buf, strlen((char*)buf), 100);
+			data=0;
+		}
+		else {
+			data++;
+		}
+	}
   /* USER CODE END 1 */
 
   /* MCU Configuration--------------------------------------------------------*/
@@ -376,16 +426,21 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_USART2_UART_Init();
-  MX_TIM1_Init();
   MX_TIM2_Init();
   MX_TIM15_Init();
   MX_I2C1_Init();
-  MX_TIM16_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
-  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_2);
   HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
   HAL_TIM_PWM_Start(&htim15, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_4);
+	TIM1->CCR4 = 100;  // Set the maximum pulse (2ms)
+	HAL_Delay (3000);  // wait for 1 beep
+	TIM1->CCR4 = 50;   // Set the minimum Pulse (1ms)
+	HAL_Delay (2000);  // wait for 2 beeps
   Intitialisation();
+  Cal_Gyro();
+
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -405,6 +460,20 @@ int main(void)
 		ReLenght();
 		ReAccel();
 		ReTime();
+		MPU6050_Read_Sensors();
+		Re_Gyro_Angle();
+		Send_Data();
+		HAL_Delay(1);
+
+
+//	    if (theta_polar > max_O_angle ) {
+//	    	theta_polar = max_O_angle;
+//		}
+//
+//	    angleO = theta_polar;
+//	    angleP = phi_polar;
+
+
   }
   /* USER CODE END 3 */
 }
@@ -531,23 +600,29 @@ static void MX_TIM1_Init(void)
 
   TIM_ClockConfigTypeDef sClockSourceConfig = {0};
   TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
 
   /* USER CODE BEGIN TIM1_Init 1 */
 
   /* USER CODE END TIM1_Init 1 */
   htim1.Instance = TIM1;
-  htim1.Init.Prescaler = 400;
+  htim1.Init.Prescaler = 1600-1;
   htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim1.Init.Period = 400;
+  htim1.Init.Period = 1000-1;
   htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim1.Init.RepetitionCounter = 0;
-  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
   }
   sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
   if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim1) != HAL_OK)
   {
     Error_Handler();
   }
@@ -558,9 +633,35 @@ static void MX_TIM1_Init(void)
   {
     Error_Handler();
   }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_PWM_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.BreakFilter = 0;
+  sBreakDeadTimeConfig.Break2State = TIM_BREAK2_DISABLE;
+  sBreakDeadTimeConfig.Break2Polarity = TIM_BREAK2POLARITY_HIGH;
+  sBreakDeadTimeConfig.Break2Filter = 0;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM1_Init 2 */
 
   /* USER CODE END TIM1_Init 2 */
+  HAL_TIM_MspPostInit(&htim1);
 
 }
 
@@ -588,7 +689,7 @@ static void MX_TIM2_Init(void)
   htim2.Init.CounterMode = TIM_COUNTERMODE_UP;
   htim2.Init.Period = 400;
   htim2.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim2.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim2) != HAL_OK)
   {
     Error_Handler();
@@ -649,7 +750,7 @@ static void MX_TIM15_Init(void)
   htim15.Init.Period = 400;
   htim15.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
   htim15.Init.RepetitionCounter = 0;
-  htim15.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  htim15.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
   if (HAL_TIM_Base_Init(&htim15) != HAL_OK)
   {
     Error_Handler();
@@ -695,68 +796,6 @@ static void MX_TIM15_Init(void)
 
   /* USER CODE END TIM15_Init 2 */
   HAL_TIM_MspPostInit(&htim15);
-
-}
-
-/**
-  * @brief TIM16 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_TIM16_Init(void)
-{
-
-  /* USER CODE BEGIN TIM16_Init 0 */
-
-  /* USER CODE END TIM16_Init 0 */
-
-  TIM_OC_InitTypeDef sConfigOC = {0};
-  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
-
-  /* USER CODE BEGIN TIM16_Init 1 */
-
-  /* USER CODE END TIM16_Init 1 */
-  htim16.Instance = TIM16;
-  htim16.Init.Prescaler = 400;
-  htim16.Init.CounterMode = TIM_COUNTERMODE_UP;
-  htim16.Init.Period = 400;
-  htim16.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
-  htim16.Init.RepetitionCounter = 0;
-  htim16.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
-  if (HAL_TIM_Base_Init(&htim16) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  if (HAL_TIM_PWM_Init(&htim16) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sConfigOC.OCMode = TIM_OCMODE_PWM1;
-  sConfigOC.Pulse = 0;
-  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
-  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
-  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
-  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
-  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
-  if (HAL_TIM_PWM_ConfigChannel(&htim16, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
-  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
-  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
-  sBreakDeadTimeConfig.DeadTime = 0;
-  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
-  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
-  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
-  if (HAL_TIMEx_ConfigBreakDeadTime(&htim16, &sBreakDeadTimeConfig) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN TIM16_Init 2 */
-
-  /* USER CODE END TIM16_Init 2 */
-  HAL_TIM_MspPostInit(&htim16);
 
 }
 
@@ -812,20 +851,20 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, MotCR_Pin|MotAR_Pin|MotBR_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, MotAR_Pin|MotBR_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, MotBD_Pin|LD3_Pin|MotCD_Pin|MotAD_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, MotBD_Pin|LD3_Pin|MotAD_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : MotCR_Pin MotAR_Pin MotBR_Pin */
-  GPIO_InitStruct.Pin = MotCR_Pin|MotAR_Pin|MotBR_Pin;
+  /*Configure GPIO pins : MotAR_Pin MotBR_Pin */
+  GPIO_InitStruct.Pin = MotAR_Pin|MotBR_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : MotBD_Pin LD3_Pin MotCD_Pin MotAD_Pin */
-  GPIO_InitStruct.Pin = MotBD_Pin|LD3_Pin|MotCD_Pin|MotAD_Pin;
+  /*Configure GPIO pins : MotBD_Pin LD3_Pin MotAD_Pin */
+  GPIO_InitStruct.Pin = MotBD_Pin|LD3_Pin|MotAD_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
